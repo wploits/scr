@@ -1,0 +1,382 @@
+print("alive")
+local CoreGui = game:GetService("CoreGui")
+if CoreGui:FindFirstChild("AutoBridgeDebug") then
+    CoreGui.AutoBridgeDebug:Destroy()
+end
+
+print("alive")
+local debugGui = Instance.new("ScreenGui")
+debugGui.Name = "AutoBridgeDebug"
+debugGui.Parent = CoreGui
+
+local debugFrame = Instance.new("Frame")
+debugFrame.Size = UDim2.new(0, 220, 0, 90)
+debugFrame.Position = UDim2.new(1, -240, 1, -110)
+debugFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+debugFrame.BackgroundTransparency = 0.2
+debugFrame.BorderSizePixel = 0
+debugFrame.Parent = debugGui
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 8)
+uiCorner.Parent = debugFrame
+
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Color = Color3.fromRGB(80, 80, 100)
+uiStroke.Thickness = 1
+uiStroke.Parent = debugFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 25)
+titleLabel.Position = UDim2.new(0, 0, 0, 5)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "Debug Overlay"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextSize = 14
+titleLabel.Parent = debugFrame
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -20, 0, 20)
+statusLabel.Position = UDim2.new(0, 15, 0, 35)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Status: Offline"
+statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 12
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = debugFrame
+
+local bridgeLabel = Instance.new("TextLabel")
+bridgeLabel.Size = UDim2.new(1, -20, 0, 20)
+bridgeLabel.Position = UDim2.new(0, 15, 0, 60)
+bridgeLabel.BackgroundTransparency = 1
+bridgeLabel.Text = "Target: None"
+bridgeLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+bridgeLabel.Font = Enum.Font.Gotham
+bridgeLabel.TextSize = 12
+bridgeLabel.TextXAlignment = Enum.TextXAlignment.Left
+bridgeLabel.Parent = debugFrame
+
+local function updateDebug(status, bridge)
+    if status then statusLabel.Text = "Status: " .. status end
+    if bridge then bridgeLabel.Text = "Target: " .. bridge end
+end
+
+print("alive")
+
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/jensonhirst/Orion/main/source"))()
+local Window = OrionLib:MakeWindow({Name = "Auto Bridge & Obby", HidePremium = false, SaveConfig = true, ConfigFolder = "AutoConfig"})
+local Tab = Window:MakeTab({Name = "Main", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+
+print("alive")
+
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local VirtualUser = game:GetService("VirtualUser")
+local LocalPlayer = Players.LocalPlayer
+local autoBridgeEnabled = false
+local autoObbyEnabled = false
+local buildingStartTime = 0
+
+print("alive")
+
+LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+print("alive")
+
+local function getPos(instance)
+    if typeof(instance) == "Vector3" then return instance end
+    if not instance then return nil end
+    if instance:IsA("Model") then return instance:GetPivot().Position end
+    if instance:IsA("BasePart") then return instance.Position end
+    return nil
+end
+
+local function walkTo(targetPosition)
+    local character = LocalPlayer.Character
+    if not character then return false end
+    local humanoid = character:FindFirstChild("Humanoid")
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not hrp or humanoid.Health <= 0 then return false end
+
+    if (hrp.Position - targetPosition).Magnitude < 3.5 then return true end
+
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentJumpHeight = 10,
+        AgentMaxSlope = 45,
+    })
+    
+    local success, _ = pcall(function()
+        path:ComputeAsync(hrp.Position, targetPosition)
+    end)
+    
+    if not success or path.Status ~= Enum.PathStatus.Success then
+        return false
+    end
+
+    local waypoints = path:GetWaypoints()
+    local lastHrpPos = hrp.Position
+    local stuckTicks = 0
+
+    for i, waypoint in ipairs(waypoints) do
+        if not autoBridgeEnabled and not autoObbyEnabled then break end
+        if not character or not character.Parent or humanoid.Health <= 0 then break end
+        
+        if waypoint.Action == Enum.PathWaypointAction.Jump then
+            humanoid.Jump = true
+        end
+        
+        humanoid:MoveTo(waypoint.Position)
+        
+        local timeout = 0
+        while timeout < 50 do
+            task.wait(0.05)
+            timeout = timeout + 1
+            if (hrp.Position - waypoint.Position).Magnitude < 4 then break end
+            if (hrp.Position - lastHrpPos).Magnitude < 0.1 then
+                stuckTicks = stuckTicks + 1
+            else
+                stuckTicks = 0
+            end
+            lastHrpPos = hrp.Position
+            if stuckTicks > 150 then
+                humanoid.Health = 0
+                return false
+            end
+        end
+    end
+    return true
+end
+
+local function getRealRaceFolder()
+    for _, folder in ipairs(workspace:GetChildren()) do
+        if folder:IsA("Folder") then
+            if folder:FindFirstChild("Red") or folder:FindFirstChild("Blue") then
+                return folder
+            end
+        end
+    end
+    return nil
+end
+
+local function getOpponentBase(raceFolder, myTeamName)
+    for _, child in ipairs(raceFolder:GetChildren()) do
+        if child:IsA("Folder") and child.Name ~= myTeamName then
+            return child
+        end
+    end
+    return nil
+end
+
+local function getClosestGiver(base, referencePos)
+    local closestGiver = nil
+    local shortestDist = math.huge
+    for _, desc in ipairs(base:GetDescendants()) do
+        if desc.Name == "Giver" then
+            local pos = getPos(desc)
+            if pos then
+                local dist = (pos - referencePos).Magnitude
+                if dist < shortestDist then
+                    shortestDist = dist
+                    closestGiver = desc
+                end
+            end
+        end
+    end
+    return closestGiver
+end
+
+local function doAutoObby()
+    while autoObbyEnabled do
+        for i = 1, 20 do
+            if not autoObbyEnabled then break end
+            local obbyName = "obby" .. (i > 1 and tostring(i) or "")
+            local obbyFolder = workspace:FindFirstChild(obbyName)
+            if obbyFolder then
+                local target = obbyFolder:FindFirstChild("obby") and obbyFolder.obby:FindFirstChild("GetCash")
+                if target then
+                    walkTo(getPos(target))
+                    task.wait(0.1)
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+end
+
+local function doAutoBridge()
+    buildingStartTime = tick()
+    while autoBridgeEnabled do
+        local teamName = LocalPlayer:GetAttribute("TeamName")
+        local raceFolder = getRealRaceFolder()
+        if not teamName or teamName == "" or not raceFolder then
+            updateDebug("Idle", "Wait Setup")
+            task.wait(1)
+            continue
+        end
+
+        local myBase = raceFolder:FindFirstChild(teamName)
+        local oppBase = getOpponentBase(raceFolder, teamName)
+        if not myBase or not oppBase then
+            task.wait(1)
+            continue
+        end
+
+        local character = LocalPlayer.Character
+        if not character or not character:FindFirstChild("Humanoid") or character.Humanoid.Health <= 0 then
+            buildingStartTime = tick()
+            task.wait(1)
+            continue
+        end
+
+        local currentBridgeNum = 1
+        local targetPos = nil
+        local selectedBridgeName = "None"
+
+        while currentBridgeNum <= 3 and autoBridgeEnabled do
+            local bridgeName = "Bridge" .. tostring(currentBridgeNum)
+            local blockerName = "BridgeBlocker" .. tostring(currentBridgeNum)
+            if myBase:FindFirstChild(blockerName) then
+                currentBridgeNum = currentBridgeNum + 1
+                continue
+            end
+            local myBridge = myBase:FindFirstChild(bridgeName)
+            local oppBridge = oppBase:FindFirstChild(bridgeName)
+            if not myBridge then
+                currentBridgeNum = currentBridgeNum + 1
+                continue
+            end
+            local oppHasBricks = false
+            if oppBridge then
+                for i = 1, 10 do
+                    local section = oppBridge:FindFirstChild(tostring(i))
+                    if section and section:FindFirstChild("Brick") then
+                        oppHasBricks = true
+                        break
+                    end
+                end
+            end
+            if oppHasBricks or oppBase:FindFirstChild(blockerName) then
+                currentBridgeNum = currentBridgeNum + 1
+                continue
+            end
+            local mixedSection = nil
+            local emptySection = nil
+            local anyPreviewLeft = false
+            for i = 1, 10 do
+                local section = myBridge:FindFirstChild(tostring(i))
+                if section then
+                    local bricks = {}
+                    local previews = {}
+                    for _, p in ipairs(section:GetChildren()) do
+                        if p.Name == "Brick" then table.insert(bricks, p)
+                        elseif p.Name == "BlockPreview" then table.insert(previews, p) end
+                    end
+                    if #previews > 0 then
+                        anyPreviewLeft = true
+                        if #bricks > 0 then
+                            mixedSection = {bricks = bricks, previews = previews}
+                            break
+                        elseif not emptySection then
+                            emptySection = {instance = section}
+                        end
+                    end
+                end
+            end
+            if not anyPreviewLeft then
+                currentBridgeNum = currentBridgeNum + 1
+                continue
+            end
+            if mixedSection then
+                local pPos = getPos(mixedSection.previews[1])
+                local closestBrick = nil
+                local dist = math.huge
+                for _, b in ipairs(mixedSection.bricks) do
+                    local bP = getPos(b)
+                    if bP and (bP - pPos).Magnitude < dist then
+                        dist = (bP - pPos).Magnitude
+                        closestBrick = b
+                    end
+                end
+                targetPos = closestBrick and getPos(closestBrick) or pPos
+            elseif emptySection then
+                local prev = myBridge:FindFirstChild(tostring(tonumber(emptySection.instance.Name) - 1))
+                local lastB = nil
+                if prev then
+                    for _, p in ipairs(prev:GetChildren()) do if p.Name == "Brick" then lastB = p end end
+                end
+                targetPos = lastB and getPos(lastB) or getPos(emptySection.instance)
+            end
+            if targetPos then
+                selectedBridgeName = bridgeName
+                break
+            end
+            currentBridgeNum = currentBridgeNum + 1
+        end
+
+        if not targetPos then
+            updateDebug("Finished All", "N/A")
+            task.wait(1)
+            continue
+        end
+
+        local tool = character:FindFirstChild("BrickTool") or (LocalPlayer.Backpack:FindFirstChild("BrickTool"))
+        if not tool then
+            updateDebug("Get Bricks", selectedBridgeName)
+            local giver = getClosestGiver(myBase, targetPos)
+            if giver then
+                local success = walkTo(getPos(giver))
+                if not success then character.Humanoid.Health = 0 end
+            else
+                character.Humanoid.Health = 0
+            end
+            buildingStartTime = tick()
+        else
+            if (tick() - buildingStartTime) > 30 then
+                updateDebug("Stuck 30s! Return", selectedBridgeName)
+                local giver = getClosestGiver(myBase, targetPos)
+                if giver then
+                    local success = walkTo(getPos(giver))
+                    if not success then character.Humanoid.Health = 0 end
+                else
+                    character.Humanoid.Health = 0
+                end
+                buildingStartTime = tick()
+                continue
+            end
+            if tool.Parent ~= character then character.Humanoid:EquipTool(tool) end
+            updateDebug("Building", selectedBridgeName)
+            walkTo(targetPos)
+        end
+        task.wait(0.05)
+    end
+end
+
+Tab:AddToggle({
+    Name = "Auto Obby",
+    Default = false,
+    Callback = function(Value)
+        autoObbyEnabled = Value
+        if Value then task.spawn(doAutoObby) end
+    end
+})
+
+Tab:AddToggle({
+    Name = "Auto Bridge",
+    Default = false,
+    Callback = function(Value)
+        autoBridgeEnabled = Value
+        if Value then task.spawn(doAutoBridge) end
+    else
+        updateDebug("Offline", "None")
+    end
+})
+
+OrionLib:Init()
